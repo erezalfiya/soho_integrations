@@ -1,0 +1,59 @@
+--- /users/sdk/sdk_build/SDK-10.3.7.0-PR1/a37xx_espressobin_1000_800-release-output/build/linux-custom/arch/arm64/boot/dts/marvell/armada-3720-espressobin.dts	2021-04-20 01:59:31.000000000 -0700
++++ /users/sdk/sdk_build/SDK-10.3.6.0-PR1/a37xx_espressobin_1000_800-release-output/build/linux-custom/arch/arm64/boot/dts/marvell/armada-3720-espressobin.dts	2021-04-23 10:20:17.279903827 -0700
+@@ -133,7 +133,8 @@
+ 
+ &mdio {
+ 	switch0: switch0@1 {
+-		compatible = "marvell,mv88e6085";
++//		compatible = "marvell,mv88e6085";
++		compatible = "marvell,mvmdio-uio";
+ 		#address-cells = <1>;
+ 		#size-cells = <0>;
+ 		reg = <1>;
+@@ -152,7 +153,8 @@
+ 
+ 			port@1 {
+ 				reg = <1>;
+-				label = "wan";
++//				label = "wan";
++				label = "lan1";
+ 				phy-handle = <&switch0phy0>;
+ 			};
+ 
+@@ -164,7 +166,8 @@
+ 
+ 			port@3 {
+ 				reg = <3>;
+-				label = "lan1";
++//				label = "lan1";
++				label = "wan";
+ 				phy-handle = <&switch0phy2>;
+ 			};
+ 
+@@ -187,6 +190,26 @@
+ 	};
+ };
+ 
++
++/* Ereza added */
++/*
++/ {
++	cpn-110-master {
++		config-space {
++			mdio: mdio@12a200 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++			};
++			switch {
++				compatible = "marvell,mvmdio-uio";
++				status = "okay";
++				mii-bus = <&mdio>;
++			};
++		};
++	};
++};
++*/
++
+ &eth0 {
+ 	phy-mode = "rgmii-id";
+ 	status = "okay";
