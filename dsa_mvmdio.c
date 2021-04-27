@@ -1,5 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2019 Marvell International Ltd. */
+/*
+ * ***************************************************************************
+ * Copyright (C) 2016 Marvell International Ltd.
+ * ***************************************************************************
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation, either version 2 of the License, or any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ * ***************************************************************************
+ */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -36,6 +51,9 @@
 #define MV_MAX_CHARS 1024
 #define MV_INVALID_PHY_ADDR 0xFF
 
+#define WAI() printk("****  %d-%s-%s\n",__LINE__,__FILE__,__FUNCTION__);
+
+
 static struct mii_bus *mv_mii_bus;
 static struct mii_bus *mv_xmii_bus;
 static unsigned int mv_phy_addr;
@@ -48,49 +66,62 @@ enum mv_reg_type {
 	MV_REG_TYPE_XMDIO
 };
 
+int doneOnce=1;
+
+static int dsa_mvmdio_remove(struct platform_device *pdev);
+static int dsa_mvmdio_probe(struct platform_device *pdev);
+static const struct of_device_id dsa_mvmdio_match[] = {
+	{ .compatible = "marvell,dsa-mvmdio" },
+	{ }
+};
+
+MODULE_DEVICE_TABLE(of, dsa_mvmdio_match);
+
+static struct platform_driver dsa_mvmdio_driver = {
+	.probe	= dsa_mvmdio_probe,
+	.remove = dsa_mvmdio_remove,
+	.driver = {
+		.name = "dsa-mvmdio",
+		.of_match_table = dsa_mvmdio_match,
+	},
+};
+
+
 /* Read regular phy register that connected on mdio bus.
  * Returns: register value on success or error value on failure.
  */
 static int dsa_mvmdio_read_mdio(unsigned char phy, unsigned char reg)
 {
-	return mdiobus_read(mv_mii_bus, phy, reg);
+	return mv_mii_bus->read(mv_mii_bus, phy, reg);
 }
 
 /* Write regular phy register that is connected on mdio bus.
  * Returns: 0 on success or an error value on failure
  */
-static int dsa_mvmdio_write_mdio(unsigned char phy,
-				 unsigned char reg,
-				 unsigned short val)
+static int dsa_mvmdio_write_mdio(unsigned char phy, unsigned char reg, unsigned short val)
 {
-	return mdiobus_write(mv_mii_bus, phy, reg, val);
+	return mv_mii_bus->write(mv_mii_bus, phy, reg, val);
 }
 
 /* Read extended phy register that connected on xmdio bus.
  * Returns: register value on success or error value on failure.
  */
-static int dsa_mvmdio_read_xmdio(unsigned char phy,
-				 unsigned char dev,
-				 unsigned char reg)
+static int dsa_mvmdio_read_xmdio(unsigned char phy, unsigned char dev, unsigned char reg)
 {
-	return mdiobus_read(mv_mii_bus, phy, (dev << 16) | reg);
+	return mv_xmii_bus->read(mv_xmii_bus, phy, (dev << 16) | reg);
 }
 
 /* Write extended phy register that is connected on xmdio bus.
  * Returns: 0 on success or an error value on failure
  */
-static int dsa_mvmdio_write_xmdio(unsigned char phy,
-				  unsigned char dev,
-				  unsigned char reg,
-				  unsigned short val)
+static int dsa_mvmdio_write_xmdio(unsigned char phy, unsigned char dev, unsigned char reg, unsigned short val)
 {
-	return mdiobus_write(mv_mii_bus, phy, (dev << 16) | reg, val);
+	return mv_xmii_bus->write(mv_xmii_bus, phy, (dev << 16) | reg, val);
 }
 
 /* Read switch register that is connected on mdio bus.
  * Uses direct access if the switch is configured in siglechip addressing mode.
- * Otherwise in multichip addressing mode it uses indirect acces through
- * command and data registers of switch.
+ * Otherwise in multichip addressing mode it uses indirect acces through command and data registers of switch.
  * Returns: register value on success or error value on failure.
  */
 static int dsa_mvmdio_read_register(unsigned char dev, unsigned char reg)
@@ -98,79 +129,70 @@ static int dsa_mvmdio_read_register(unsigned char dev, unsigned char reg)
 	int ret;
 	unsigned short cmd_data;
 
+	WAI();
+	printk("%d %d 0x%x\n",dev,reg,mv_phy_addr);
 	if (mv_phy_addr == 0)
-		return mdiobus_read(mv_mii_bus, mv_phy_addr, (dev << 16) | reg);
+		return mv_mii_bus->read(mv_mii_bus, dev, reg);
 
 	/* Write to SMI Command Register */
-	cmd_data = (1 << MV_SMIBUSY_OFFSET) |
-		(MV_SMIFUNC_INT << MV_SMIFUNC_OFFSET) |
+	cmd_data  = (1 << MV_SMIBUSY_OFFSET) | (MV_SMIFUNC_INT << MV_SMIFUNC_OFFSET) |
 		(1 << MV_SMIMODE_OFFSET) | (MV_SMIOP_READ << MV_SMIOP_OFFSET) |
-		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) |
-		((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
+		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) | ((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
 
-	ret = mdiobus_write(mv_mii_bus, mv_phy_addr, MV_PHY_CMD_REG,
-			    cmd_data);
+//	printk("%d,%d\n",mv_mii_bus, mv_phy_addr);
+	WAI();
+	pr_err("enter dsa_mvmdio_read_register\n");
+	ret = mv_mii_bus->write(mv_mii_bus, mv_phy_addr, MV_PHY_CMD_REG, cmd_data);
 	if (ret < 0)
 		return ret;
 
 	/* Read from SMI Data Register */
-	ret = mdiobus_read(mv_mii_bus, mv_phy_addr, MV_PHY_DATA_REG);
+	ret = mv_mii_bus->read(mv_mii_bus, mv_phy_addr, MV_PHY_DATA_REG);
 
 	return ret;
 }
 
 /* Write switch register that is connected on mdio bus.
  * Uses direct access if the switch is configured in siglechip addressing mode.
- * Otherwise in multichip addressing mode it uses indirect acces through
- * command and data registers of switch.
+ * Otherwise in multichip addressing mode it uses indirect acces through command and data registers of switch.
  * Returns: 0 on success or an error value on failure.
  */
-static int dsa_mvmdio_write_register(unsigned char dev,
-				     unsigned char reg,
-				     unsigned short data)
+static int dsa_mvmdio_write_register(unsigned char dev, unsigned char reg, unsigned short data)
 {
 	int ret;
 	unsigned short cmd_data;
 
 	if (mv_phy_addr == 0)
-		return mdiobus_write(mv_mii_bus, dev, reg, data);
+		return mv_mii_bus->write(mv_mii_bus, dev, reg, data);
 
 	/* Write data to SMI Data Register */
-	ret = mdiobus_write(mv_mii_bus, mv_phy_addr, MV_PHY_DATA_REG, data);
+	ret = mv_mii_bus->write(mv_mii_bus, mv_phy_addr, MV_PHY_DATA_REG, data);
 	if (ret < 0)
 		return ret;
 
 	/* Write to SMI Command Register */
-	cmd_data  = (1 << MV_SMIBUSY_OFFSET) |
-		(MV_SMIFUNC_INT << MV_SMIFUNC_OFFSET) |
-		(1 << MV_SMIMODE_OFFSET) |
-		(MV_SMIOP_WRITE << MV_SMIOP_OFFSET) |
-		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) |
-		((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
+	cmd_data  = (1 << MV_SMIBUSY_OFFSET) | (MV_SMIFUNC_INT << MV_SMIFUNC_OFFSET) |
+		(1 << MV_SMIMODE_OFFSET) | (MV_SMIOP_WRITE << MV_SMIOP_OFFSET) |
+		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) | ((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
 
-	ret = mdiobus_write(mv_mii_bus, mv_phy_addr, MV_PHY_CMD_REG,
-			    cmd_data);
+	ret = mv_mii_bus->write(mv_mii_bus, mv_phy_addr, MV_PHY_CMD_REG, cmd_data);
 
 	return ret;
 }
 
 /* Read switch internal phy register when smi_func = 0.
- * Read external phy register that is connected to the switch port when
- * smi_func = 1.
+ * Read external phy register that is connected to the switch port when smi_func = 1.
  * Returns: register value on success or error value on failure.
  */
-static int dsa_mvmdio_phy_read_register(unsigned char dev,
-					unsigned char reg,
-					unsigned char smi_func)
+static int dsa_mvmdio_phy_read_register(unsigned char dev, unsigned char reg, unsigned char smi_func)
 {
 	int ret;
 	unsigned short cmd_data;
 
 	/* Write to SMI Command Register */
-	cmd_data = (1 << MV_SMIBUSY_OFFSET) | (smi_func << MV_SMIFUNC_OFFSET) |
+	cmd_data  = (1 << MV_SMIBUSY_OFFSET) | (smi_func << MV_SMIFUNC_OFFSET) |
 		(1 << MV_SMIMODE_OFFSET) | (MV_SMIOP_READ << MV_SMIOP_OFFSET) |
-		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) |
-		((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
+		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) | ((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
 
 	ret = dsa_mvmdio_write_register(MV_GLOBAL2, MV_SMI_PHY_CMD, cmd_data);
 	if (ret < 0)
@@ -182,14 +204,11 @@ static int dsa_mvmdio_phy_read_register(unsigned char dev,
 }
 
 /* Write switch internal phy register when smi_func = 0.
- * Write external phy register that is connected to the switch port when
- * smi_func = 1.
+ * Write external phy register that is connected to the switch port when smi_func = 1.
  * Returns: 0 on success or an error value on failure.
  */
-static int dsa_mvmdio_phy_write_register(unsigned char dev,
-					 unsigned char reg,
-					 unsigned short data,
-					 unsigned char smi_func)
+static int dsa_mvmdio_phy_write_register(unsigned char dev, unsigned char reg,
+					 unsigned short data, unsigned char smi_func)
 {
 	int ret;
 	unsigned short cmd_data;
@@ -200,10 +219,9 @@ static int dsa_mvmdio_phy_write_register(unsigned char dev,
 		return ret;
 
 	/* Write to SMI Command Register */
-	cmd_data = (1 << MV_SMIBUSY_OFFSET) | (smi_func << MV_SMIFUNC_OFFSET) |
+	cmd_data  = (1 << MV_SMIBUSY_OFFSET) | (smi_func << MV_SMIFUNC_OFFSET) |
 		(1 << MV_SMIMODE_OFFSET) | (MV_SMIOP_WRITE << MV_SMIOP_OFFSET) |
-		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) |
-		((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
+		((dev & MV_DEVAD_MASK) << MV_DEVAD_OFFSET) | ((reg & MV_REGAD_MASK) << MV_REGAD_OFFSET);
 
 	ret = dsa_mvmdio_write_register(MV_GLOBAL2, MV_SMI_PHY_CMD, cmd_data);
 
@@ -211,17 +229,26 @@ static int dsa_mvmdio_phy_write_register(unsigned char dev,
 }
 
 /* Processing "read" command in sysfs.
- * Returns: register value on success or error value on failure for a given
- * register type.
+ * Returns: register value on success or error value on failure for a given register type.
  */
-static int dsa_mvmdio_read(unsigned char port,
-			   unsigned char dev_addr,
-			   unsigned char reg,
-			   unsigned char type,
-			   unsigned int *value)
+static int dsa_mvmdio_read(unsigned char port, unsigned char dev_addr, unsigned char reg,
+			   unsigned char type, unsigned int *value)
 {
 	int ret = 0;
-
+	
+	printk("enter dsa_mvmdio_read%c %c %c %c\n",port,dev_addr,reg,type);
+	WAI();
+# if 0
+        if(doneOnce)
+	{
+	ret = dsa_mvmdio_probe((struct platform_device*)&dsa_mvmdio_driver);
+        if(ret)
+                {
+                pr_err("dsa_mvmdio_probe failed\n");
+                }
+	doneOnce = 0;
+	}
+#endif
 	if (type == MV_REG_TYPE_SWITCH)
 		ret = dsa_mvmdio_read_register(port, reg);
 	else if (type == MV_REG_TYPE_PHY_INT)
@@ -243,23 +270,18 @@ static int dsa_mvmdio_read(unsigned char port,
 
 /* Processing "write" command in sysfsi.
  * Returns: 0 on success or error value on failure.
- */
-static int dsa_mvmdio_write(unsigned char port,
-			    unsigned char dev_addr,
-			    unsigned char reg,
-			    unsigned char type,
-			    unsigned short value)
+*/
+static int dsa_mvmdio_write(unsigned char port, unsigned char dev_addr, unsigned char reg,
+			    unsigned char type, unsigned short value)
 {
 	int ret = 0;
 
 	if (type == MV_REG_TYPE_SWITCH)
 		ret = dsa_mvmdio_write_register(port, reg, value);
 	else if (type == MV_REG_TYPE_PHY_INT)
-		ret = dsa_mvmdio_phy_write_register(port, reg, value,
-						    MV_SMIFUNC_INT);
+		ret = dsa_mvmdio_phy_write_register(port, reg, value, MV_SMIFUNC_INT);
 	else if (type == MV_REG_TYPE_PHY_EXT)
-		ret = dsa_mvmdio_phy_write_register(port, reg, value,
-						    MV_SMIFUNC_EXT);
+		ret = dsa_mvmdio_phy_write_register(port, reg, value, MV_SMIFUNC_EXT);
 	else if (type == MV_REG_TYPE_MDIO)
 		ret = dsa_mvmdio_write_mdio(port, reg, value);
 	else if (type == MV_REG_TYPE_XMDIO)
@@ -275,9 +297,7 @@ static int dsa_mvmdio_write(unsigned char port,
  * Print 0 to 32 registers values of a given register type.
  * Returns: 0 on success or error value on failure.
  */
-static int dsa_mvmdio_dump(unsigned char port,
-			   unsigned char dev_addr,
-			   unsigned char type)
+static int dsa_mvmdio_dump(unsigned char port, unsigned char dev_addr, unsigned char type)
 {
 	int i;
 	int max_regs = MV_MAX_REGS_PER_PORT;
@@ -288,20 +308,15 @@ static int dsa_mvmdio_dump(unsigned char port,
 		if (i % 4 == 0)
 			off += sprintf(buf + off, "(%02X-%02X)  ", i, i + 3);
 		if (type == MV_REG_TYPE_SWITCH)
-			off += sprintf(buf + off, "%04X ",
-				dsa_mvmdio_read_register(port, i));
+			off += sprintf(buf + off, "%04X ", dsa_mvmdio_read_register(port, i));
 		else if (type == MV_REG_TYPE_PHY_INT)
-			off += sprintf(buf + off, "%04X ",
-			dsa_mvmdio_phy_read_register(port, i, MV_SMIFUNC_INT));
+			off += sprintf(buf + off, "%04X ", dsa_mvmdio_phy_read_register(port, i, MV_SMIFUNC_INT));
 		else if (type == MV_REG_TYPE_PHY_EXT)
-			off += sprintf(buf + off, "%04X ",
-			dsa_mvmdio_phy_read_register(port, i, MV_SMIFUNC_EXT));
+			off += sprintf(buf + off, "%04X ", dsa_mvmdio_phy_read_register(port, i, MV_SMIFUNC_EXT));
 		else if (type == MV_REG_TYPE_MDIO)
-			off += sprintf(buf + off, "%04X ",
-			dsa_mvmdio_read_mdio(port, i));
+			off += sprintf(buf + off, "%04X ", dsa_mvmdio_read_mdio(port, i));
 		else if (type == MV_REG_TYPE_XMDIO)
-			off += sprintf(buf + off, "%04X ",
-			dsa_mvmdio_read_xmdio(port, dev_addr, i));
+			off += sprintf(buf + off, "%04X ", dsa_mvmdio_read_xmdio(port, dev_addr, i));
 		if (i % 4 == 3)
 			off += sprintf(buf + off, "\n");
 	}
@@ -315,26 +330,16 @@ static ssize_t dsa_mvmdio_help(char *buf)
 {
 	int off = 0;
 
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"cat help                         - print help\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"echo [t] [p] [x] [r]     > read  - read register\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"echo [t] [p] [x] [r] [v] > write - write register\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"echo [t] [p] [x] > dump  - dump 32 registers\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"parameters (in hexadecimal):\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"    [t] type. 0-switch, 1-internal phy, 2-external phy regs\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"              3-regular phy, 4-extended phy\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"    [p] port addr or phy-id.\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"    [x] device address. valid only for extended phy.\n");
-	off += scnprintf(buf + off, PAGE_SIZE - off,
-			"    [r] register address.\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "cat help                         - print help\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "echo [t] [p] [x] [r]     > read  - read register\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "echo [t] [p] [x] [r] [v] > write - write register\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "echo [t] [p] [x]         > dump  - dump 32 registers\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "parameters (in hexadecimal):\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "    [t] type. 0-switch, 1-internal phy, 2-external phy regs\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "              3-regular phy, 4-extended phy\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "    [p] port addr or phy-id.\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "    [x] device address. valid only for extended phy.\n");
+	off += scnprintf(buf + off, PAGE_SIZE - off, "    [r] register address.\n");
 	off += scnprintf(buf + off, PAGE_SIZE - off, "    [v] value.\n");
 	off += scnprintf(buf + off, PAGE_SIZE - off, "Examples:\n");
 	off += scnprintf(buf + off, PAGE_SIZE - off,
@@ -358,9 +363,7 @@ static ssize_t dsa_mvmdio_help(char *buf)
 	return off;
 }
 
-static ssize_t dsa_mvmdio_show(struct device *dev,
-			       struct device_attribute *attr,
-			       char *buf)
+static ssize_t dsa_mvmdio_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	int off = 0;
 	ssize_t len = 0;
@@ -374,10 +377,7 @@ static ssize_t dsa_mvmdio_show(struct device *dev,
 	return off;
 }
 
-static ssize_t dsa_mvmdio_store(struct device *dev,
-				struct device_attribute *attr,
-				const char *buf,
-				size_t len)
+static ssize_t dsa_mvmdio_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t len)
 {
 	const char      *name = attr->attr.name;
 	unsigned long   flags;
@@ -390,45 +390,36 @@ static ssize_t dsa_mvmdio_store(struct device *dev,
 		return -EPERM;
 
 	/* Read arguments */
-	ret = sscanf(buf, "%x %x %x %x %x",
-		     &type, &port, &dev_addr, &reg, &val);
+	ret = sscanf(buf, "%x %x %x %x %x", &type, &port, &dev_addr, &reg, &val);
 
-	if (mv_phy_addr == MV_INVALID_PHY_ADDR && type < MV_REG_TYPE_MDIO) {
+	if ((mv_phy_addr == MV_INVALID_PHY_ADDR) && (type < MV_REG_TYPE_MDIO)) {
 		pr_err("\"sw-smi-addr\" property not defined in dts file. Assuming switch not connected\n");
 		return len;
 	}
 
 	local_irq_save(flags);
 	if (!strcmp(name, "read")) {
-		err = dsa_mvmdio_read((unsigned char)port,
-				      (unsigned char)dev_addr,
-				      (unsigned char)reg,
+		err = dsa_mvmdio_read((unsigned char)port, (unsigned char)dev_addr, (unsigned char)reg,
 				      (unsigned char)type, &data);
 		if (err)
 			pr_err("Register read failed, err - %d\n", err);
 		else
-			pr_err("read:: type:%d, port=0x%X, dev=0x%X,reg=0x%X, val=0x%04X\n",
-				type, port, dev_addr, reg, data);
+			pr_err("read:: type:%d, port=0x%X, dev=0x%X, reg=0x%X, val=0x%04X\n",
+			       type, port, dev_addr, reg, data);
 	} else if (!strcmp(name, "write")) {
-		err = dsa_mvmdio_write((unsigned char)port,
-				       (unsigned char)dev_addr,
-				       (unsigned char)reg,
-				       (unsigned char)type,
-				       (unsigned short)val);
+		err = dsa_mvmdio_write((unsigned char)port, (unsigned char)dev_addr, (unsigned char)reg,
+				       (unsigned char)type, (unsigned short)val);
 		if (err)
 			pr_err("Register write failed, err - %d\n", err);
 		else
-			pr_err("write:: type:%d, port=0x%X, dev=0x%X,reg=0x%X, val=0x%X\n",
-				type, port, dev_addr, reg, val);
+			pr_err("write:: type:%d, port=0x%X, dev=0x%X, reg=0x%X, val=0x%X\n",
+			       type, port, dev_addr, reg, val);
 	} else if (!strcmp(name, "dump")) {
-		err = dsa_mvmdio_dump((unsigned char)port,
-				      (unsigned char)dev_addr,
-				      (unsigned char)type);
+		err = dsa_mvmdio_dump((unsigned char)port, (unsigned char)dev_addr, (unsigned char)type);
 		if (err)
 			pr_err("Register dump failed, err - %d\n", err);
 		else
-			pr_err("dump:: type %d, port=0x%X, dev=0x%X\n",
-			       type, port, dev_addr);
+			pr_err("dump:: type %d, port=0x%X, dev=0x%X\n", type, port, dev_addr);
 	}
 
 	local_irq_restore(flags);
@@ -436,10 +427,10 @@ static ssize_t dsa_mvmdio_store(struct device *dev,
 	return err ? -EINVAL : len;
 }
 
-static DEVICE_ATTR(read, 0200, dsa_mvmdio_show, dsa_mvmdio_store);
-static DEVICE_ATTR(write, 0200, dsa_mvmdio_show, dsa_mvmdio_store);
-static DEVICE_ATTR(dump, 0200, dsa_mvmdio_show, dsa_mvmdio_store);
-static DEVICE_ATTR(help, 0400, dsa_mvmdio_show, dsa_mvmdio_store);
+static DEVICE_ATTR(read, S_IWUSR, dsa_mvmdio_show, dsa_mvmdio_store);
+static DEVICE_ATTR(write, S_IWUSR, dsa_mvmdio_show, dsa_mvmdio_store);
+static DEVICE_ATTR(dump, S_IWUSR, dsa_mvmdio_show, dsa_mvmdio_store);
+static DEVICE_ATTR(help, S_IRUSR, dsa_mvmdio_show, dsa_mvmdio_store);
 
 static struct attribute *dsa_mvmdio_attrs[] = {
 	&dev_attr_read.attr,
@@ -461,20 +452,34 @@ static int dsa_mvmdio_probe(struct platform_device *pdev)
 	struct device_node *xmdio;
 	int ret;
 
+	WAI();
+//	printf("enter dsa_mvmdio_probe\n");
+	pr_err("enter dsa_mvmdio_probe\n");
 	np = pdev->dev.of_node;
+	pr_err("$$$$ np = %p\n",np);
+	if (np == NULL)
+	{
+		pr_err("**** node is NULL\n");
+		pdev->dev.of_node  = of_find_node_by_name(NULL, "dsa-mvmdio");
+		np = pdev->dev.of_node;
+		pr_err("$$$$@@@ np = %p\n",np);
+	}
 	mdio = of_parse_phandle(np, "mii-bus", 0);
 	if (!mdio) {
 		pr_err("%s : parse mii-bus handle failed\n", __func__);
 		return -EINVAL;
 	}
+	
+	pr_err("enter line422\n");
 
 	mv_mii_bus = of_mdio_find_bus(mdio);
+//	pdev->dev.of_node  = of_find_node_by_name(NULL, "mydevice");
 	if (!mv_mii_bus) {
 		pr_err("%s : mdio find bus failed\n", __func__);
 		return -EINVAL;
 	}
 
-	ret = of_property_read_u32(np, "sw-smi-addr", &mv_phy_addr); // Ereza fixed from reg
+	ret = of_property_read_u32(np, /*"reg"* Ereza Fixed */ "sw-smi-addr", &mv_phy_addr);
 	if (ret) {
 		pr_err("%s : switch smi addr not defined\n", __func__);
 		mv_phy_addr = MV_INVALID_PHY_ADDR;
@@ -500,27 +505,12 @@ static int dsa_mvmdio_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id dsa_mvmdio_match[] = {
-	{ .compatible = "marvell,dsa-mvmdio" },
-	{ }
-};
-
-MODULE_DEVICE_TABLE(of, dsa_mvmdio_match);
-
-static struct platform_driver dsa_mvmdio_driver = {
-	.probe	= dsa_mvmdio_probe,
-	.remove = dsa_mvmdio_remove,
-	.driver = {
-		.name = "dsa-mvmdio",
-		.of_match_table = dsa_mvmdio_match,
-	},
-};
-
 static int dsa_mvmdio_init(void)
 {
 	int err;
 	struct device *pd;
 
+	pr_err("enter dsa_mvmdio_init\n");
 	err = platform_driver_register(&dsa_mvmdio_driver);
 	if (err) {
 		pr_err("register dsa_mvmdio_driver() failed\n");
@@ -530,9 +520,18 @@ static int dsa_mvmdio_init(void)
 	pd = &platform_bus;
 	err = sysfs_create_group(&pd->kobj, &dsa_mvmdio_group);
 	if (err)
-		pr_err("init sysfs group %s failed %d\n",
-		       dsa_mvmdio_group.name, err);
+		pr_err("init sysfs group %s failed %d\n", dsa_mvmdio_group.name, err);
 
+	WAI();
+#if 0
+	err = dsa_mvmdio_probe(&dsa_mvmdio_driver);
+	if (err)
+		{
+		pr_err("dsa_mvmdio_probe failed\n");
+		}
+#endif
+	WAI();
+	
 	return err;
 }
 
